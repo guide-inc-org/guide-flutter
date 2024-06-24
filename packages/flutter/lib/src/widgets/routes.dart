@@ -242,13 +242,13 @@ abstract class TransitionRoute<T> extends OverlayRoute<T> implements PredictiveB
           overlayEntries.first.opaque = false;
         }
         _performanceModeRequestHandle ??=
-          SchedulerBinding.instance
-            .requestPerformanceMode(ui.DartPerformanceMode.latency);
+            SchedulerBinding.instance
+                .requestPerformanceMode(ui.DartPerformanceMode.latency);
       case AnimationStatus.dismissed:
-        // We might still be an active route if a subclass is controlling the
-        // transition and hits the dismissed status. For example, the iOS
-        // back gesture drives this animation to the dismissed status before
-        // removing the route and disposing it.
+      // We might still be an active route if a subclass is controlling the
+      // transition and hits the dismissed status. For example, the iOS
+      // back gesture drives this animation to the dismissed status before
+      // removing the route and disposing it.
         if (!isActive) {
           navigator!.finalizeRoute(this);
           _popFinalized = true;
@@ -343,9 +343,9 @@ abstract class TransitionRoute<T> extends OverlayRoute<T> implements PredictiveB
         final Animation<double> currentTrain = (current is TrainHoppingAnimation ? current.currentTrain : current)!;
         final Animation<double> nextTrain = nextRoute._animation!;
         if (
-          currentTrain.value == nextTrain.value ||
-          nextTrain.status == AnimationStatus.completed ||
-          nextTrain.status == AnimationStatus.dismissed
+        currentTrain.value == nextTrain.value ||
+            nextTrain.status == AnimationStatus.completed ||
+            nextTrain.status == AnimationStatus.dismissed
         ) {
           _setSecondaryAnimation(nextTrain, nextRoute.completed);
         } else {
@@ -364,9 +364,9 @@ abstract class TransitionRoute<T> extends OverlayRoute<T> implements PredictiveB
             switch (status) {
               case AnimationStatus.completed:
               case AnimationStatus.dismissed:
-                // The nextTrain has stopped animating without train hopping.
-                // Directly sets the secondary animation and disposes the
-                // TrainHoppingAnimation.
+              // The nextTrain has stopped animating without train hopping.
+              // Directly sets the secondary animation and disposes the
+              // TrainHoppingAnimation.
                 _setSecondaryAnimation(nextTrain, nextRoute.completed);
                 if (_trainHoppingListenerRemover != null) {
                   _trainHoppingListenerRemover!();
@@ -531,7 +531,7 @@ abstract class TransitionRoute<T> extends OverlayRoute<T> implements PredictiveB
         if (_controller?.isAnimating ?? false) {
           // Otherwise, use a custom popping animation duration and curve.
           final int droppedPageBackAnimationTime =
-              ui.lerpDouble(0, 800, _controller!.value)!.floor();
+          ui.lerpDouble(0, 800, _controller!.value)!.floor();
           _controller!.animateBack(0.0,
               duration: Duration(milliseconds: droppedPageBackAnimationTime),
               curve: Curves.fastLinearToSlowEaseIn);
@@ -604,7 +604,7 @@ abstract interface class PredictiveBackRoute {
   /// Handles a predictive back gesture ending successfully.
   void handleCommitBackGesture();
 
-  /// Handles a predictive back gesture ending in cancelation.
+  /// Handles a predictive back gesture ending in cancellation.
   void handleCancelBackGesture();
 }
 
@@ -831,7 +831,7 @@ mixin LocalHistoryRoute<T> on Route<T> {
 
   @Deprecated(
     'Use popDisposition instead. '
-    'This feature was deprecated after v3.12.0-1.0.pre.',
+        'This feature was deprecated after v3.12.0-1.0.pre.',
   )
   @override
   Future<RoutePopDisposition> willPop() async {
@@ -909,9 +909,9 @@ class _ModalScopeStatus extends InheritedWidget {
   @override
   bool updateShouldNotify(_ModalScopeStatus old) {
     return isCurrent != old.isCurrent ||
-           canPop != old.canPop ||
-           impliesAppBarDismissal != old.impliesAppBarDismissal ||
-           route != old.route;
+        canPop != old.canPop ||
+        impliesAppBarDismissal != old.impliesAppBarDismissal ||
+        route != old.route;
   }
 
   @override
@@ -1004,7 +1004,7 @@ class _ModalScopeState<T> extends State<_ModalScope<T>> {
 
   bool get _shouldIgnoreFocusRequest {
     return widget.route.animation?.status == AnimationStatus.reverse ||
-      (widget.route.navigator?.userGestureInProgress ?? false);
+        (widget.route.navigator?.userGestureInProgress ?? false);
   }
 
   bool get _shouldRequestFocus {
@@ -1022,6 +1022,8 @@ class _ModalScopeState<T> extends State<_ModalScope<T>> {
 
   @override
   Widget build(BuildContext context) {
+    // Only top most route can participate in focus traversal.
+    focusScopeNode.skipTraversal = !widget.route.isCurrent;
     return AnimatedBuilder(
       animation: widget.route.restorationScopeId,
       builder: (BuildContext context, Widget? child) {
@@ -1048,24 +1050,22 @@ class _ModalScopeState<T> extends State<_ModalScope<T>> {
                   },
                   child: PrimaryScrollController(
                     controller: primaryScrollController,
-                    child: FocusScope(
-                      node: focusScopeNode, // immutable
-                      // Only top most route can participate in focus traversal.
-                      skipTraversal: !widget.route.isCurrent,
+                    child: FocusScope.withExternalFocusNode(
+                      focusScopeNode: focusScopeNode, // immutable
                       child: RepaintBoundary(
-                        child: AnimatedBuilder(
-                          animation: _listenable, // immutable
+                        child: ListenableBuilder(
+                          listenable: _listenable, // immutable
                           builder: (BuildContext context, Widget? child) {
                             return widget.route.buildTransitions(
                               context,
                               widget.route.animation!,
                               widget.route.secondaryAnimation!,
-                              // This additional AnimatedBuilder is include because if the
+                              // This additional ListenableBuilder is include because if the
                               // value of the userGestureInProgressNotifier changes, it's
                               // only necessary to rebuild the IgnorePointer widget and set
                               // the focus node's ability to focus.
-                              AnimatedBuilder(
-                                animation: widget.route.navigator?.userGestureInProgressNotifier ?? ValueNotifier<bool>(false),
+                              ListenableBuilder(
+                                listenable: widget.route.navigator?.userGestureInProgressNotifier ?? ValueNotifier<bool>(false),
                                 builder: (BuildContext context, Widget? child) {
                                   final bool ignoreEvents = _shouldIgnoreFocusRequest;
                                   focusScopeNode.canRequestFocus = !ignoreEvents;
@@ -1356,11 +1356,11 @@ abstract class ModalRoute<T> extends TransitionRoute<T> with LocalHistoryRoute<T
   ///  * [buildPage], which is used to describe the actual contents of the page,
   ///    and whose result is passed to the `child` argument of this method.
   Widget buildTransitions(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
+      BuildContext context,
+      Animation<double> animation,
+      Animation<double> secondaryAnimation,
+      Widget child,
+      ) {
     return child;
   }
 
@@ -1691,7 +1691,7 @@ abstract class ModalRoute<T> extends TransitionRoute<T> with LocalHistoryRoute<T
   ///    this method checks.
   @Deprecated(
     'Use popDisposition instead. '
-    'This feature was deprecated after v3.12.0-1.0.pre.',
+        'This feature was deprecated after v3.12.0-1.0.pre.',
   )
   @override
   Future<RoutePopDisposition> willPop() async {
@@ -1760,7 +1760,7 @@ abstract class ModalRoute<T> extends TransitionRoute<T> with LocalHistoryRoute<T
   ///    that [willPop] checks.
   @Deprecated(
     'Use registerPopEntry or PopScope instead. '
-    'This feature was deprecated after v3.12.0-1.0.pre.',
+        'This feature was deprecated after v3.12.0-1.0.pre.',
   )
   void addScopedWillPopCallback(WillPopCallback callback) {
     assert(_scopeKey.currentState != null, 'Tried to add a willPop callback to a route that is not currently in the tree.');
@@ -1776,7 +1776,7 @@ abstract class ModalRoute<T> extends TransitionRoute<T> with LocalHistoryRoute<T
   ///    checked by [willPop].
   @Deprecated(
     'Use unregisterPopEntry or PopScope instead. '
-    'This feature was deprecated after v3.12.0-1.0.pre.',
+        'This feature was deprecated after v3.12.0-1.0.pre.',
   )
   void removeScopedWillPopCallback(WillPopCallback callback) {
     assert(_scopeKey.currentState != null, 'Tried to remove a willPop callback from a route that is not currently in the tree.');
@@ -1856,7 +1856,7 @@ abstract class ModalRoute<T> extends TransitionRoute<T> with LocalHistoryRoute<T
   ///    a pop might be vetoed.
   @Deprecated(
     'Use popDisposition instead. '
-    'This feature was deprecated after v3.12.0-1.0.pre.',
+        'This feature was deprecated after v3.12.0-1.0.pre.',
   )
   @protected
   bool get hasScopedWillPopCallback {
@@ -1937,7 +1937,7 @@ abstract class ModalRoute<T> extends TransitionRoute<T> with LocalHistoryRoute<T
     }
     barrier = IgnorePointer(
       ignoring: animation!.status == AnimationStatus.reverse || // changedInternalState is called when animation.status updates
-                animation!.status == AnimationStatus.dismissed, // dismissed is possible when doing a manual pop gesture
+          animation!.status == AnimationStatus.dismissed, // dismissed is possible when doing a manual pop gesture
       child: barrier,
     );
     if (semanticsDismissible && barrierDismissible) {
@@ -2238,11 +2238,11 @@ class RawDialogRoute<T> extends PopupRoute<T> {
     this.anchorPoint,
     super.traversalEdgeBehavior,
   }) : _pageBuilder = pageBuilder,
-       _barrierDismissible = barrierDismissible,
-       _barrierLabel = barrierLabel,
-       _barrierColor = barrierColor,
-       _transitionDuration = transitionDuration,
-       _transitionBuilder = transitionBuilder;
+        _barrierDismissible = barrierDismissible,
+        _barrierLabel = barrierLabel,
+        _barrierColor = barrierColor,
+        _transitionDuration = transitionDuration,
+        _transitionBuilder = transitionBuilder;
 
   final RoutePageBuilder _pageBuilder;
 
