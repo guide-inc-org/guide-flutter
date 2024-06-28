@@ -349,11 +349,16 @@ class _TextLayout {
     // Luckily they have the same bidi embedding level as the paragraph as per
     // https://unicode.org/reports/tr9/#L1, so we can anchor the caret to the
     // last logical trailing space.
+    /** TODO: should re-use function check white space
     final bool hasTrailingSpaces = switch (rawString.codeUnitAt(rawString.length - 1)) {
       0x9 ||        // horizontal tab
       0x20 => true, // space
       _ => false,
     };
+    */
+    final lastCodeUnit = rawString.codeUnitAt(rawString.length - 1);
+    final bool hasTrailingSpaces = TextLayoutMetrics.isWhitespace(lastCodeUnit);
+    // debugPrint('hasTrailingSpaces: ============ $hasTrailingSpaces === lastCodeUnit: $lastCodeUnit');
 
     final double baseline = lineMetrics.baseline;
     final double dx;
