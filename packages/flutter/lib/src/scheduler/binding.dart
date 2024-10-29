@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:developer' show Flow, Timeline, TimelineTask;
+import 'dart:io';
 import 'dart:ui' show AppLifecycleState, DartPerformanceMode, FramePhase, FrameTiming, PlatformDispatcher, TimingsCallback;
 
 import 'package:collection/collection.dart' show HeapPriorityQueue, PriorityQueue;
@@ -418,7 +419,10 @@ mixin SchedulerBinding on BindingBase {
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        _setFramesEnabledState(false);
+        if(!Platform.isMacOS) {
+          // fix issue: https://github.com/MixinNetwork/flutter-plugins/issues/289
+          _setFramesEnabledState(false);
+        }
     }
   }
 
