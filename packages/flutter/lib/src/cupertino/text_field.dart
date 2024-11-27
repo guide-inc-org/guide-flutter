@@ -72,7 +72,7 @@ const CupertinoDynamicColor _kClearButtonColor = CupertinoDynamicColor.withBrigh
 //
 // This value is in device pixels, not logical pixels as is typically used
 // throughout the codebase.
-const int _iOSHorizontalCursorOffsetPixels = -2;
+const int _iOSHorizontalCursorOffsetPixels = 0;
 
 /// Visibility of text field overlays based on the state of the current text entry.
 ///
