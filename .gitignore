@@ -145,7 +145,7 @@ app.*.symbols
 
 # Monorepo
 .cipd
-.gclient
+# .gclient
 .gclient_entries
 .python-version
 .gclient_previous_custom_vars
