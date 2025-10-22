@@ -80,9 +80,9 @@ void LogEGLError(std::string_view message) {
     FML_LOG(ERROR) << "Showing EGL context lost dialog...";
 
     std::wstringstream msg;
-    msg << L"予期せぬエラーが発生しました。\n\n";
+    msg << L"エラーが発生しました。\n\n";
     msg << L"Error location: " << message.data() << L"\n\n";
-    msg << L"OKボタンを選択するとアプリケーションが終了します。";
+    msg << L"OKボタンを押して、HYPER SBI FXを終了してください。";
 
     // Try multiple times to ensure dialog is shown
     bool dialog_shown_successfully = false;
