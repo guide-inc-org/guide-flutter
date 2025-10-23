@@ -19,6 +19,34 @@ namespace {
 
 const wchar_t* kGraphicsErrorTitle = L"HYPER SBI FX";
 
+// Callback function to enumerate and close all windows of current process
+BOOL CALLBACK CloseWindowCallback(HWND hwnd, LPARAM lParam) {
+  __try {
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(hwnd, &process_id);
+
+    // If this window belongs to our process, close it
+    if (process_id == GetCurrentProcessId()) {
+      // Check if window is valid and visible
+      if (IsWindow(hwnd)) {
+        FML_LOG(ERROR) << "Closing window: " << hwnd;
+
+        // Use PostMessage instead of SendMessage to avoid blocking
+        // If PostMessage fails, try destroying the window directly
+        if (!PostMessage(hwnd, WM_CLOSE, 0, 0)) {
+          FML_LOG(ERROR) << "PostMessage failed, attempting DestroyWindow...";
+          DestroyWindow(hwnd);
+        }
+      }
+    }
+  }
+  __except(EXCEPTION_EXECUTE_HANDLER) {
+    FML_LOG(ERROR) << "Exception in CloseWindowCallback, continuing...";
+  }
+
+  return TRUE;  // Continue enumeration even if an error occurs
+}
+
 const char* EGLErrorToString(EGLint error) {
   switch (error) {
     case EGL_SUCCESS:
@@ -142,9 +170,47 @@ void LogEGLError(std::string_view message) {
       // Even if everything fails, we must exit
     }
 
-    // Exit the current process
-    FML_LOG(ERROR) << "Exiting current process...";
-    ExitProcess(1);
+    // Attempt graceful shutdown with timeout protection
+    FML_LOG(ERROR) << "Attempting graceful shutdown...";
+
+    __try {
+      // Step 1: Enumerate and close all windows belonging to this process
+      FML_LOG(ERROR) << "Enumerating and closing all windows of current process...";
+
+      // Use a try-catch to protect against EnumWindows failures
+      BOOL enum_result = EnumWindows(CloseWindowCallback, 0);
+      if (!enum_result) {
+        FML_LOG(ERROR) << "EnumWindows failed or was interrupted";
+      }
+
+      // Give reasonable time for WM_CLOSE messages to be processed
+      // But not too long to avoid hanging
+      Sleep(300);
+
+      // Step 2: Post quit message to the message loop
+      FML_LOG(ERROR) << "Posting quit message...";
+      PostQuitMessage(1);
+
+      // Brief wait for message loop to process quit
+      Sleep(100);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+      FML_LOG(ERROR) << "Exception during graceful shutdown, proceeding to force termination...";
+    }
+
+    // Step 3: If graceful shutdown didn't work, terminate the process
+    // This ensures the app ALWAYS exits even if:
+    // - Message loop is blocked
+    // - Windows are hung
+    // - Any unexpected exception occurred
+    FML_LOG(ERROR) << "Forcing process termination as final fallback...";
+
+    // Flush any pending log messages before termination
+    fflush(stderr);
+    fflush(stdout);
+
+    // Force terminate - this WILL exit the process
+    TerminateProcess(GetCurrentProcess(), 1);
   }
 }
 
