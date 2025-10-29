@@ -109,7 +109,6 @@ void LogEGLError(std::string_view message) {
 
     std::wstringstream msg;
     msg << L"エラーが発生しました。\n\n";
-    msg << L"Error location: " << message.data() << L"\n\n";
     msg << L"OKボタンを押して、HYPER SBI FXを終了してください。";
 
     // Try multiple times to ensure dialog is shown
