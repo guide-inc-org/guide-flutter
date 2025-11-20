@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <shared_mutex>
 #include <sstream>
+#include <thread>
 
 #include "flutter/fml/logging.h"
+#include "flutter/fml/time/time_point.h"
 #include "flutter/fml/paths.h"
 #include "flutter/fml/platform/win/wstring_conversion.h"
 #include "flutter/fml/synchronization/waitable_event.h"
@@ -60,14 +62,24 @@ FlutterRendererConfig GetOpenGLRendererConfig() {
     if (!host->egl_manager()) {
       return false;
     }
-    return host->egl_manager()->render_context()->MakeCurrent();
+    if (host->egl_manager()->render_context()->MakeCurrent()) {
+      return true;
+    }
+    host->HandleContextLoss(host->view(kImplicitViewId));
+    return host->egl_manager() &&
+           host->egl_manager()->render_context()->MakeCurrent();
   };
   config.open_gl.clear_current = [](void* user_data) -> bool {
     auto host = static_cast<FlutterWindowsEngine*>(user_data);
     if (!host->egl_manager()) {
       return false;
     }
-    return host->egl_manager()->render_context()->MakeCurrent();
+    if (host->egl_manager()->render_context()->ClearCurrent()) {
+      return true;
+    }
+    host->HandleContextLoss(host->view(kImplicitViewId));
+    return host->egl_manager() &&
+           host->egl_manager()->render_context()->ClearCurrent();
   };
   config.open_gl.present = [](void* user_data) -> bool { FML_UNREACHABLE(); };
   config.open_gl.fbo_reset_after_present = true;
@@ -84,7 +96,12 @@ FlutterRendererConfig GetOpenGLRendererConfig() {
     if (!host->egl_manager()) {
       return false;
     }
-    return host->egl_manager()->resource_context()->MakeCurrent();
+    if (host->egl_manager()->resource_context()->MakeCurrent()) {
+      return true;
+    }
+    host->HandleContextLoss(host->view(kImplicitViewId));
+    return host->egl_manager() &&
+           host->egl_manager()->resource_context()->MakeCurrent();
   };
   config.open_gl.gl_external_texture_frame_callback =
       [](void* user_data, int64_t texture_id, size_t width, size_t height,
@@ -982,6 +999,83 @@ void FlutterWindowsEngine::OnChannelUpdate(std::string name, bool listening) {
   } else if (name == "flutter/lifecycle" && listening) {
     lifecycle_manager_->BeginProcessingLifecycle();
   }
+}
+
+bool FlutterWindowsEngine::HandleContextLoss(FlutterWindowsView* view) {
+  if (!egl_manager_) {
+    return false;
+  }
+
+  bool expected = false;
+  if (!handling_context_loss_.compare_exchange_strong(expected, true)) {
+    // If another thread is already handling a loss, wait a bit to avoid log
+    // spam from immediate retries.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    return false;
+  }
+
+  FML_LOG(WARNING) << "EGL context lost; attempting to recreate ANGLE device.";
+
+  // RTTI is disabled on this build; compositor_ is OpenGL when an EGL manager
+  // exists, so a static cast is safe here.
+  auto* opengl_compositor =
+      static_cast<CompositorOpenGL*>(compositor_.get());
+  if (opengl_compositor) {
+    opengl_compositor->OnContextLost();
+  }
+
+  bool reset_result = egl_manager_->Reset();
+  if (!reset_result) {
+    // If we've recently failed, wait until the next retry window to avoid
+    // hammering ANGLE while the GPU is still gone.
+    auto now_ms =
+        fml::TimePoint::Now().ToEpochDelta().ToMilliseconds();
+    auto next_retry_ms = next_context_retry_ms_.load();
+    if (now_ms < next_retry_ms) {
+      FML_LOG(WARNING) << "Skipping EGL re-init until retry window.";
+      handling_context_loss_.store(false);
+      return false;
+    }
+
+    // If a simple reset failed (likely because the device is still gone),
+    // try recreating the EGL manager from scratch with a short retry.
+    egl_manager_.reset();
+    constexpr int kMaxRetries = 3;
+    for (int attempt = 0; attempt < kMaxRetries && !egl_manager_; attempt++) {
+      auto candidate = egl::Manager::Create();
+      if (candidate) {
+        egl_manager_ = std::move(candidate);
+        break;
+      }
+      FML_LOG(WARNING) << "EGL re-init retry " << attempt + 1 << " failed; "
+                       << "waiting for GPU to return.";
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    reset_result = (egl_manager_ != nullptr);
+
+    // Defer the next retry slightly to reduce log spam when the GPU is gone.
+    auto retry_after_ms =
+        fml::TimePoint::Now().ToEpochDelta().ToMilliseconds() + 500;
+    next_context_retry_ms_.store(retry_after_ms);
+  }
+
+  if (reset_result) {
+    if (view != nullptr) {
+      view->RecreateRenderSurface();
+    } else {
+      std::shared_lock read_lock(views_mutex_);
+      for (const auto& entry : views_) {
+        if (entry.second) {
+          entry.second->RecreateRenderSurface();
+        }
+      }
+    }
+  } else {
+    FML_LOG(ERROR) << "Failed to reset EGL manager after context loss.";
+  }
+
+  handling_context_loss_.store(false);
+  return reset_result;
 }
 
 bool FlutterWindowsEngine::Present(const FlutterPresentViewInfo* info) {

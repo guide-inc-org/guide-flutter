@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "flutter/common/constants.h"
+#include "flutter/fml/logging.h"
 #include "flutter/fml/make_copyable.h"
 #include "flutter/fml/platform/win/wstring_conversion.h"
 #include "flutter/fml/synchronization/waitable_event.h"
@@ -712,6 +713,36 @@ void FlutterWindowsView::CreateRenderSurface() {
   }
 }
 
+bool FlutterWindowsView::RecreateRenderSurface() {
+  if (!engine_->egl_manager()) {
+    return false;
+  }
+
+  std::unique_lock<std::mutex> lock(resize_mutex_);
+
+  if (surface_) {
+    if (!surface_->Destroy()) {
+      FML_LOG(WARNING) << "Failed to destroy existing surface before "
+                          "recreating after context loss.";
+    }
+    surface_.reset();
+  }
+
+  PhysicalWindowBounds bounds = binding_handler_->GetPhysicalWindowBounds();
+  surface_ = engine_->egl_manager()->CreateWindowSurface(
+      GetWindowHandle(), bounds.width, bounds.height);
+  if (!surface_) {
+    return false;
+  }
+
+  UpdateVsync(*engine_, surface_.get(), NeedsVsync());
+
+  resize_target_width_ = bounds.width;
+  resize_target_height_ = bounds.height;
+  resize_status_ = ResizeState::kDone;
+  return true;
+}
+
 bool FlutterWindowsView::ResizeRenderSurface(size_t width, size_t height) {
   FML_DCHECK(surface_ != nullptr);
 
@@ -726,8 +757,8 @@ bool FlutterWindowsView::ResizeRenderSurface(size_t width, size_t height) {
   // Ideally this would use ANGLE's automatic surface sizing instead.
   // See: https://github.com/flutter/flutter/issues/79427
   if (!surface_->Destroy()) {
-    FML_LOG(ERROR) << "View resize failed to destroy surface";
-    return false;
+    FML_LOG(WARNING) << "View resize failed to destroy surface; continuing "
+                        "recreation after context loss.";
   }
 
   std::unique_ptr<egl::WindowSurface> resized_surface =

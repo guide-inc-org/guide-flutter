@@ -34,6 +34,10 @@ class Manager {
 
   virtual ~Manager();
 
+  // Recreate the display, config, and contexts after a device/context loss.
+  // Returns true if a new EGL setup is ready for use.
+  virtual bool Reset();
+
   // Whether the manager is currently valid.
   bool IsValid() const;
 
@@ -89,6 +93,9 @@ class Manager {
   // Initialize the EGL render and resource contexts.
   bool InitializeContexts();
 
+  // On the next InitializeDisplay attempt, prefer WARP first.
+  void PreferWarpNextInitialization() { prefer_warp_next_init_ = true; }
+
   // Initialize the D3D11 device.
   bool InitializeDevice();
 
@@ -111,6 +118,9 @@ class Manager {
 
   // The current D3D device.
   Microsoft::WRL::ComPtr<ID3D11Device> resolved_device_ = nullptr;
+
+  // Whether to try the WARP display attributes first on the next init.
+  bool prefer_warp_next_init_ = false;
 
   FML_DISALLOW_COPY_AND_ASSIGN(Manager);
 };

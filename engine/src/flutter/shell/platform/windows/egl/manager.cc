@@ -46,6 +46,26 @@ Manager::~Manager() {
   --instance_count_;
 }
 
+bool Manager::Reset() {
+  CleanUp();
+  PreferWarpNextInitialization();
+
+  if (!InitializeDisplay()) {
+    return false;
+  }
+
+  if (!InitializeConfig()) {
+    return false;
+  }
+
+  if (!InitializeContexts()) {
+    return false;
+  }
+
+  is_valid_ = true;
+  return true;
+}
+
 bool Manager::InitializeDisplay() {
   // These are preferred display attributes and request ANGLE's D3D11
   // renderer. eglInitialize will only succeed with these attributes if the
@@ -87,16 +107,24 @@ bool Manager::InitializeDisplay() {
   const EGLint d3d11_warp_display_attributes[] = {
       EGL_PLATFORM_ANGLE_TYPE_ANGLE,
       EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+      EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE,
+      EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE,
       EGL_PLATFORM_ANGLE_ENABLE_AUTOMATIC_TRIM_ANGLE,
       EGL_TRUE,
       EGL_NONE,
   };
 
-  std::vector<const EGLint*> display_attributes_configs = {
-      d3d11_display_attributes,
-      d3d11_fl_9_3_display_attributes,
-      d3d11_warp_display_attributes,
-  };
+  std::vector<const EGLint*> display_attributes_configs;
+  if (prefer_warp_next_init_) {
+    display_attributes_configs = {d3d11_warp_display_attributes,
+                                  d3d11_display_attributes,
+                                  d3d11_fl_9_3_display_attributes};
+  } else {
+    display_attributes_configs = {d3d11_display_attributes,
+                                  d3d11_fl_9_3_display_attributes,
+                                  d3d11_warp_display_attributes};
+  }
+  prefer_warp_next_init_ = false;
 
   PFNEGLGETPLATFORMDISPLAYEXTPROC egl_get_platform_display_EXT =
       reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
@@ -213,6 +241,7 @@ bool Manager::InitializeDevice() {
 }
 
 void Manager::CleanUp() {
+  is_valid_ = false;
   EGLBoolean result = EGL_FALSE;
 
   // Needs to be reset before destroying the contexts.
@@ -221,6 +250,8 @@ void Manager::CleanUp() {
   // Needs to be reset before destroying the EGLDisplay.
   render_context_.reset();
   resource_context_.reset();
+  config_ = nullptr;
+  ::eglReleaseThread();
 
   if (display_ != EGL_NO_DISPLAY) {
     // Display is reused between instances so only terminate display

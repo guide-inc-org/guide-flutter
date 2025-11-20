@@ -67,6 +67,9 @@ class FlutterWindowsView : public WindowBindingHandlerDelegate {
   // This is a no-op if using software rasterization.
   void CreateRenderSurface();
 
+  // Recreate the rendering surface after a device/context loss.
+  bool RecreateRenderSurface();
+
   // Get the EGL surface that backs the Flutter view.
   //
   // This might be nullptr or an invalid surface.

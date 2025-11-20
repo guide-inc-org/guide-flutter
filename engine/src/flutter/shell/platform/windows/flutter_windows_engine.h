@@ -5,6 +5,7 @@
 #ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_FLUTTER_WINDOWS_ENGINE_H_
 #define FLUTTER_SHELL_PLATFORM_WINDOWS_FLUTTER_WINDOWS_ENGINE_H_
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -163,6 +164,9 @@ class FlutterWindowsEngine {
   // The EGL manager object. If this is nullptr, then we are
   // rendering using software instead of OpenGL.
   egl::Manager* egl_manager() const { return egl_manager_.get(); }
+
+  // Attempt to recreate EGL state and surfaces after a device/context loss.
+  bool HandleContextLoss(FlutterWindowsView* view);
 
   WindowProcDelegateManager* window_proc_delegate_manager() {
     return window_proc_delegate_manager_.get();
@@ -408,6 +412,9 @@ class FlutterWindowsEngine {
   // surfaces. If nullptr, ANGLE failed to initialize and software rendering
   // should be used instead.
   std::unique_ptr<egl::Manager> egl_manager_;
+
+  std::atomic<bool> handling_context_loss_{false};
+  std::atomic<int64_t> next_context_retry_ms_{0};
 
   // The compositor that creates backing stores for the engine to render into
   // and then presents them onto views.

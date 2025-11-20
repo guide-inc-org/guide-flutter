@@ -14,12 +14,6 @@ namespace {
 
 constexpr uint32_t kWindowFrameBufferId = 0;
 
-// The metadata for an OpenGL framebuffer backing store.
-struct FramebufferBackingStore {
-  uint32_t framebuffer_id;
-  uint32_t texture_id;
-};
-
 }  // namespace
 
 CompositorOpenGL::CompositorOpenGL(FlutterWindowsEngine* engine,
@@ -30,53 +24,18 @@ CompositorOpenGL::CompositorOpenGL(FlutterWindowsEngine* engine,
 bool CompositorOpenGL::CreateBackingStore(
     const FlutterBackingStoreConfig& config,
     FlutterBackingStore* result) {
-  if (!is_initialized_ && !Initialize()) {
+  if (!EnsureInitialized()) {
     return false;
   }
 
   auto store = std::make_unique<FramebufferBackingStore>();
+  store->width = config.size.width;
+  store->height = config.size.height;
+  store->generation = backing_store_generation_;
 
-  gl_->GenTextures(1, &store->texture_id);
-  gl_->GenFramebuffers(1, &store->framebuffer_id);
-
-  gl_->BindFramebuffer(GL_FRAMEBUFFER, store->framebuffer_id);
-
-  gl_->BindTexture(GL_TEXTURE_2D, store->texture_id);
-  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  gl_->TexImage2D(GL_TEXTURE_2D, 0, format_.general_format, config.size.width,
-                  config.size.height, 0, format_.general_format,
-                  GL_UNSIGNED_BYTE, nullptr);
-  gl_->BindTexture(GL_TEXTURE_2D, 0);
-
-  if (enable_impeller_) {
-    // Impeller requries that its onscreen surface is Multisampled and already
-    // has depth/stencil attached in order for anti-aliasing to work.
-    gl_->FramebufferTexture2DMultisampleEXT(GL_FRAMEBUFFER,
-                                            GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                            store->texture_id, 0, 4);
-
-    // Set up depth/stencil attachment for impeller renderer.
-    GLuint depth_stencil;
-    gl_->GenRenderbuffers(1, &depth_stencil);
-    gl_->BindRenderbuffer(GL_RENDERBUFFER, depth_stencil);
-    gl_->RenderbufferStorageMultisampleEXT(
-        GL_RENDERBUFFER,      // target
-        4,                    // samples
-        GL_DEPTH24_STENCIL8,  // internal format
-        config.size.width,    // width
-        config.size.height    // height
-    );
-    gl_->FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                 GL_RENDERBUFFER, depth_stencil);
-    gl_->FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
-                                 GL_RENDERBUFFER, depth_stencil);
-
-  } else {
-    gl_->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                              GL_TEXTURE_2D, store->texture_id, 0);
+  if (!CreateFramebufferAttachments(config.size.width, config.size.height,
+                                    store.get())) {
+    return false;
   }
 
   result->type = kFlutterBackingStoreTypeOpenGL;
@@ -92,15 +51,25 @@ bool CompositorOpenGL::CreateBackingStore(
 }
 
 bool CompositorOpenGL::CollectBackingStore(const FlutterBackingStore* store) {
-  FML_DCHECK(is_initialized_);
   FML_DCHECK(store->type == kFlutterBackingStoreTypeOpenGL);
   FML_DCHECK(store->open_gl.type == kFlutterOpenGLTargetTypeFramebuffer);
 
   auto user_data = static_cast<FramebufferBackingStore*>(
       store->open_gl.framebuffer.user_data);
 
-  gl_->DeleteFramebuffers(1, &user_data->framebuffer_id);
-  gl_->DeleteTextures(1, &user_data->texture_id);
+  // If the context was lost, GL objects have already been torn down. Skip
+  // deletions in that case.
+  if (gl_) {
+    if (user_data->depth_stencil_id != 0) {
+      gl_->DeleteRenderbuffers(1, &user_data->depth_stencil_id);
+    }
+    if (user_data->framebuffer_id != 0) {
+      gl_->DeleteFramebuffers(1, &user_data->framebuffer_id);
+    }
+    if (user_data->texture_id != 0) {
+      gl_->DeleteTextures(1, &user_data->texture_id);
+    }
+  }
 
   delete user_data;
   return true;
@@ -111,21 +80,17 @@ bool CompositorOpenGL::Present(FlutterWindowsView* view,
                                size_t layers_count) {
   FML_DCHECK(view != nullptr);
 
+  if (!EnsureInitialized()) {
+    return false;
+  }
+
   // Clear the view if there are no layers to present.
   if (layers_count == 0) {
-    // Normally the compositor is initialized when the first backing store is
-    // created. However, on an empty frame no backing stores are created and
-    // the present needs to initialize the compositor.
-    if (!is_initialized_ && !Initialize()) {
-      return false;
-    }
-
     return Clear(view);
   }
 
   // TODO: Support compositing layers and platform views.
   // See: https://github.com/flutter/flutter/issues/31713
-  FML_DCHECK(is_initialized_);
   FML_DCHECK(layers_count == 1);
   FML_DCHECK(layers[0]->offset.x == 0 && layers[0]->offset.y == 0);
   FML_DCHECK(layers[0]->type == kFlutterLayerContentTypeBackingStore);
@@ -135,6 +100,10 @@ bool CompositorOpenGL::Present(FlutterWindowsView* view,
 
   auto width = layers[0]->size.width;
   auto height = layers[0]->size.height;
+
+  if (!EnsureBackingStoreReady(layers[0])) {
+    return HandleContextLoss(view);
+  }
 
   // Check if this frame can be presented. This resizes the surface if a resize
   // is pending and |width| and |height| match the target size.
@@ -148,10 +117,12 @@ bool CompositorOpenGL::Present(FlutterWindowsView* view,
 
   egl::WindowSurface* surface = view->surface();
   if (!surface->MakeCurrent()) {
-    return false;
+    return HandleContextLoss(view);
   }
 
-  auto source_id = layers[0]->backing_store->open_gl.framebuffer.name;
+  auto user_data = static_cast<FramebufferBackingStore*>(
+      layers[0]->backing_store->open_gl.framebuffer.user_data);
+  auto source_id = user_data->framebuffer_id;
 
   // Disable the scissor test as it can affect blit operations.
   // Prevents regressions like: https://github.com/flutter/flutter/issues/140828
@@ -173,7 +144,7 @@ bool CompositorOpenGL::Present(FlutterWindowsView* view,
   );
 
   if (!surface->SwapBuffers()) {
-    return false;
+    return HandleContextLoss(view);
   }
 
   view->OnFramePresented();
@@ -210,6 +181,137 @@ bool CompositorOpenGL::Initialize() {
   return true;
 }
 
+bool CompositorOpenGL::EnsureInitialized() {
+  if (is_initialized_) {
+    return true;
+  }
+  return Initialize();
+}
+
+void CompositorOpenGL::OnContextLost() {
+  gl_.reset();
+  is_initialized_ = false;
+  format_ = {};
+  backing_store_generation_++;
+}
+
+bool CompositorOpenGL::HandleContextLoss(FlutterWindowsView* view) {
+  OnContextLost();
+  engine_->HandleContextLoss(view);
+  return false;
+}
+
+bool CompositorOpenGL::CreateFramebufferAttachments(
+    size_t width,
+    size_t height,
+    FramebufferBackingStore* store) {
+  if (!gl_) {
+    return false;
+  }
+
+  gl_->GenTextures(1, &store->texture_id);
+  gl_->GenFramebuffers(1, &store->framebuffer_id);
+
+  gl_->BindFramebuffer(GL_FRAMEBUFFER, store->framebuffer_id);
+
+  gl_->BindTexture(GL_TEXTURE_2D, store->texture_id);
+  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  gl_->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  gl_->TexImage2D(GL_TEXTURE_2D, 0, format_.general_format,
+                  static_cast<GLsizei>(width),
+                  static_cast<GLsizei>(height), 0, format_.general_format,
+                  GL_UNSIGNED_BYTE, nullptr);
+  gl_->BindTexture(GL_TEXTURE_2D, 0);
+
+  if (enable_impeller_) {
+    // Impeller requries that its onscreen surface is Multisampled and already
+    // has depth/stencil attached in order for anti-aliasing to work.
+    gl_->FramebufferTexture2DMultisampleEXT(GL_FRAMEBUFFER,
+                                            GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                            store->texture_id, 0, 4);
+
+    // Set up depth/stencil attachment for impeller renderer.
+    gl_->GenRenderbuffers(1, &store->depth_stencil_id);
+    gl_->BindRenderbuffer(GL_RENDERBUFFER, store->depth_stencil_id);
+    gl_->RenderbufferStorageMultisampleEXT(
+        GL_RENDERBUFFER,      // target
+        4,                    // samples
+        GL_DEPTH24_STENCIL8,  // internal format
+        static_cast<GLsizei>(width),    // width
+        static_cast<GLsizei>(height)    // height
+    );
+    gl_->FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                 GL_RENDERBUFFER, store->depth_stencil_id);
+    gl_->FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                                 GL_RENDERBUFFER, store->depth_stencil_id);
+  } else {
+    store->depth_stencil_id = 0;
+    gl_->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                              GL_TEXTURE_2D, store->texture_id, 0);
+  }
+
+  return true;
+}
+
+bool CompositorOpenGL::RefreshBackingStore(
+    const FlutterBackingStore* backing_store,
+    size_t width,
+    size_t height) {
+  auto store = static_cast<FramebufferBackingStore*>(
+      backing_store->open_gl.framebuffer.user_data);
+  if (store == nullptr) {
+    return false;
+  }
+
+  if (gl_) {
+    if (store->depth_stencil_id != 0) {
+      gl_->DeleteRenderbuffers(1, &store->depth_stencil_id);
+      store->depth_stencil_id = 0;
+    }
+    if (store->framebuffer_id != 0) {
+      gl_->DeleteFramebuffers(1, &store->framebuffer_id);
+      store->framebuffer_id = 0;
+    }
+    if (store->texture_id != 0) {
+      gl_->DeleteTextures(1, &store->texture_id);
+      store->texture_id = 0;
+    }
+  }
+
+  store->width = width;
+  store->height = height;
+  store->generation = backing_store_generation_;
+
+  if (!CreateFramebufferAttachments(width, height, store)) {
+    return false;
+  }
+
+  auto* mutable_store = const_cast<FlutterBackingStore*>(backing_store);
+  mutable_store->open_gl.framebuffer.name = store->framebuffer_id;
+  mutable_store->open_gl.framebuffer.user_data = store;
+  return true;
+}
+
+bool CompositorOpenGL::EnsureBackingStoreReady(const FlutterLayer* layer) {
+  const FlutterBackingStore* backing_store = layer->backing_store;
+  auto store = backing_store
+                   ? static_cast<FramebufferBackingStore*>(
+                         backing_store->open_gl.framebuffer.user_data)
+                   : nullptr;
+  if (store == nullptr) {
+    return false;
+  }
+
+  if (store->generation == backing_store_generation_) {
+    return true;
+  }
+
+  return RefreshBackingStore(backing_store, layer->size.width,
+                             layer->size.height);
+}
+
 bool CompositorOpenGL::Clear(FlutterWindowsView* view) {
   FML_DCHECK(is_initialized_);
 
@@ -224,14 +326,14 @@ bool CompositorOpenGL::Clear(FlutterWindowsView* view) {
 
   egl::WindowSurface* surface = view->surface();
   if (!surface->MakeCurrent()) {
-    return false;
+    return HandleContextLoss(view);
   }
 
   gl_->ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
   gl_->Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
   if (!surface->SwapBuffers()) {
-    return false;
+    return HandleContextLoss(view);
   }
 
   view->OnFramePresented();
