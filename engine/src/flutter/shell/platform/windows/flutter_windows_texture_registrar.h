@@ -45,6 +45,15 @@ class FlutterWindowsTextureRegistrar {
                        size_t height,
                        FlutterOpenGLTexture* texture);
 
+  // Attempts to populate the given pixel-buffer |pixel_buffer| by invoking the
+  // callback that was registered via |RegisterTexture| with type
+  // |kFlutterDesktopPixelBufferTexture|.
+  // Used by the software renderer path - no GL required.
+  bool PopulateTextureSoftware(int64_t texture_id,
+                               size_t width,
+                               size_t height,
+                               FlutterSoftwarePixelBuffer* pixel_buffer);
+
  private:
   FlutterWindowsEngine* engine_ = nullptr;
   std::shared_ptr<egl::ProcTable> gl_;
@@ -53,6 +62,11 @@ class FlutterWindowsTextureRegistrar {
   std::unordered_map<int64_t, std::unique_ptr<flutter::ExternalTexture>>
       textures_;
   std::mutex map_mutex_;
+
+  // Pixel-buffer texture callbacks registered while running in software mode
+  // (when |gl_| is null). Keyed by software-mode texture ids.
+  std::unordered_map<int64_t, FlutterDesktopPixelBufferTextureConfig>
+      software_pixel_buffer_callbacks_;
 
   int64_t EmplaceTexture(std::unique_ptr<ExternalTexture> texture);
 

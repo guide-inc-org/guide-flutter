@@ -4,6 +4,7 @@
 
 #include "flutter/shell/platform/windows/flutter_windows_texture_registrar.h"
 
+#include <atomic>
 #include <mutex>
 
 #include "flutter/fml/logging.h"
@@ -14,6 +15,11 @@
 
 namespace {
 static constexpr int64_t kInvalidTexture = -1;
+
+// Software-mode texture ids start from a small positive number. They never
+// collide with the GL/D3D path's ids because that path stores `this`
+// pointers (large heap addresses) cast to int64.
+static std::atomic<int64_t> next_software_texture_id{1};
 }
 
 namespace flutter {
@@ -25,20 +31,37 @@ FlutterWindowsTextureRegistrar::FlutterWindowsTextureRegistrar(
 
 int64_t FlutterWindowsTextureRegistrar::RegisterTexture(
     const FlutterDesktopTextureInfo* texture_info) {
-  if (!gl_) {
-    return kInvalidTexture;
-  }
-
   if (texture_info->type == kFlutterDesktopPixelBufferTexture) {
     if (!texture_info->pixel_buffer_config.callback) {
       FML_LOG(ERROR) << "Invalid pixel buffer texture callback.";
       return kInvalidTexture;
     }
 
-    return EmplaceTexture(std::make_unique<flutter::ExternalTexturePixelBuffer>(
-        texture_info->pixel_buffer_config.callback,
-        texture_info->pixel_buffer_config.user_data, gl_));
+    // Pixel-buffer textures need to work in BOTH GL and software rendering
+    // modes — but |gl_| is always non-null (constructed unconditionally in
+    // FlutterWindowsEngine), so we cannot use it to decide which mode is
+    // active. Instead, we register the callback in BOTH maps:
+    // - |textures_| (via EmplaceTexture) for the GL path
+    // - |software_pixel_buffer_callbacks_| for the software path
+    // The actual rendering mode is decided by the engine later via the
+    // appropriate FlutterRendererConfig callback.
+    auto external_texture =
+        std::make_unique<flutter::ExternalTexturePixelBuffer>(
+            texture_info->pixel_buffer_config.callback,
+            texture_info->pixel_buffer_config.user_data, gl_);
+    int64_t texture_id = external_texture->texture_id();
+    {
+      std::lock_guard<std::mutex> lock(map_mutex_);
+      software_pixel_buffer_callbacks_[texture_id] =
+          texture_info->pixel_buffer_config;
+    }
+    return EmplaceTexture(std::move(external_texture));
   } else if (texture_info->type == kFlutterDesktopGpuSurfaceTexture) {
+    if (!gl_) {
+      // GPU surface textures require a GL context to share with - not
+      // supported in software mode.
+      return kInvalidTexture;
+    }
     const FlutterDesktopGpuSurfaceTextureConfig* gpu_surface_config =
         &texture_info->gpu_surface_config;
     auto surface_type = SAFE_ACCESS(gpu_surface_config, type,
@@ -89,6 +112,10 @@ void FlutterWindowsTextureRegistrar::UnregisterTexture(int64_t texture_id,
       if (it != textures_.end()) {
         textures_.erase(it);
       }
+      auto sw_it = software_pixel_buffer_callbacks_.find(texture_id);
+      if (sw_it != software_pixel_buffer_callbacks_.end()) {
+        software_pixel_buffer_callbacks_.erase(sw_it);
+      }
     }
     if (callback) {
       callback();
@@ -123,6 +150,34 @@ bool FlutterWindowsTextureRegistrar::PopulateTexture(
     texture = it->second.get();
   }
   return texture->PopulateTexture(width, height, opengl_texture);
+}
+
+bool FlutterWindowsTextureRegistrar::PopulateTextureSoftware(
+    int64_t texture_id,
+    size_t width,
+    size_t height,
+    FlutterSoftwarePixelBuffer* pixel_buffer) {
+  FlutterDesktopPixelBufferTextureConfig cfg;
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    auto it = software_pixel_buffer_callbacks_.find(texture_id);
+    if (it == software_pixel_buffer_callbacks_.end()) {
+      return false;
+    }
+    cfg = it->second;
+  }
+
+  size_t w = width, h = height;
+  const FlutterDesktopPixelBuffer* src = cfg.callback(w, h, cfg.user_data);
+  if (!src || !src->buffer) {
+    return false;
+  }
+  pixel_buffer->buffer = src->buffer;
+  pixel_buffer->width = src->width;
+  pixel_buffer->height = src->height;
+  pixel_buffer->release_callback = src->release_callback;
+  pixel_buffer->release_context = src->release_context;
+  return true;
 }
 
 };  // namespace flutter

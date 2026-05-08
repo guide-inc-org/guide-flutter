@@ -2314,6 +2314,42 @@ FlutterEngineResult FlutterEngineInitialize(size_t version,
     }
   }
 #endif
+
+  // Software-mode external texture callback (no GL/Metal required).
+  // Allows Texture widget to render plugin-provided pixel buffers when
+  // Flutter falls back to software rasterization.
+  flutter::EmbedderExternalTextureSoftware::ExternalTextureCallback
+      external_texture_software_callback;
+  if (config->type == kSoftware) {
+    const FlutterSoftwareRendererConfig* software_config = &config->software;
+    if (SAFE_ACCESS(software_config, external_texture_frame_callback,
+                    nullptr) != nullptr) {
+      auto sw_user_data =
+          SAFE_ACCESS(software_config, external_texture_user_data, user_data);
+      // If embedder did not set the override field (or set it to nullptr),
+      // fall back to the main engine user_data — every callback reaches
+      // back into the engine via that pointer.
+      if (!sw_user_data) {
+        sw_user_data = user_data;
+      }
+      external_texture_software_callback =
+          [ptr = software_config->external_texture_frame_callback,
+           sw_user_data](int64_t texture_identifier, size_t width,
+                         size_t height)
+          -> std::unique_ptr<FlutterSoftwarePixelBuffer> {
+        std::unique_ptr<FlutterSoftwarePixelBuffer> pixel_buffer =
+            std::make_unique<FlutterSoftwarePixelBuffer>();
+        if (!ptr(sw_user_data, texture_identifier, width, height,
+                 pixel_buffer.get())) {
+          return nullptr;
+        }
+        return pixel_buffer;
+      };
+      external_texture_resolver = std::make_unique<ExternalTextureResolver>(
+          external_texture_software_callback);
+    }
+  }
+
   auto custom_task_runners = SAFE_ACCESS(args, custom_task_runners, nullptr);
   auto thread_config_callback = [&custom_task_runners](
                                     const fml::Thread::ThreadConfig& config) {

@@ -113,6 +113,19 @@ FlutterRendererConfig GetSoftwareRendererConfig() {
         FML_UNREACHABLE();
         return false;
       };
+  // Allow the Texture widget to render plugin-provided pixel buffers while
+  // Flutter is in software mode. Without this, |Texture| would render black
+  // because the embedder API has no way to ask back for the pixel data.
+  config.software.external_texture_frame_callback =
+      [](void* user_data, int64_t texture_id, size_t width, size_t height,
+         FlutterSoftwarePixelBuffer* out) -> bool {
+        auto host = static_cast<FlutterWindowsEngine*>(user_data);
+        if (!host->texture_registrar()) {
+          return false;
+        }
+        return host->texture_registrar()->PopulateTextureSoftware(
+            texture_id, width, height, out);
+      };
   return config;
 }
 

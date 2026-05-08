@@ -17,6 +17,8 @@
 #include "flutter/shell/platform/embedder/embedder_external_texture_metal.h"
 #endif
 
+#include "flutter/shell/platform/embedder/embedder_external_texture_software.h"
+
 namespace flutter {
 class EmbedderExternalTextureResolver {
  public:
@@ -34,6 +36,9 @@ class EmbedderExternalTextureResolver {
       EmbedderExternalTextureMetal::ExternalTextureCallback metal_callback);
 #endif
 
+  explicit EmbedderExternalTextureResolver(
+      EmbedderExternalTextureSoftware::ExternalTextureCallback sw_callback);
+
   std::unique_ptr<Texture> ResolveExternalTexture(int64_t texture_id);
 
   bool SupportsExternalTextures();
@@ -46,6 +51,8 @@ class EmbedderExternalTextureResolver {
 #ifdef SHELL_ENABLE_METAL
   EmbedderExternalTextureMetal::ExternalTextureCallback metal_callback_;
 #endif
+
+  EmbedderExternalTextureSoftware::ExternalTextureCallback software_callback_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(EmbedderExternalTextureResolver);
 };

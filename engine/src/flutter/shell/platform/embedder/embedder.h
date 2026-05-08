@@ -515,6 +515,36 @@ typedef bool (*TextureFrameCallback)(void* /* user data */,
                                      size_t /* width */,
                                      size_t /* height */,
                                      FlutterOpenGLTexture* /* texture out */);
+
+// A CPU pixel buffer used to deliver an external texture frame in software
+// rendering mode. Mirrors the generic shape of FlutterDesktopPixelBuffer but
+// is defined here in the embedder layer to keep the renderer-config API
+// platform-agnostic.
+typedef struct {
+  /// Pointer to the pixel data. Must be RGBA8888 with row-major layout and
+  /// |width| * 4 bytes per row.
+  const uint8_t* buffer;
+  /// Width of the pixel buffer in pixels.
+  size_t width;
+  /// Height of the pixel buffer in pixels.
+  size_t height;
+  /// Optional callback invoked when the engine has consumed |buffer|. The
+  /// embedder must keep |buffer| valid until this callback fires (or until
+  /// the texture is unregistered).
+  void (*release_callback)(void* release_context);
+  /// Opaque data passed to |release_callback|.
+  void* release_context;
+} FlutterSoftwarePixelBuffer;
+
+// Software-mode external texture callback. Mirrors |TextureFrameCallback|
+// but delivers a CPU pixel buffer instead of a GL texture.
+typedef bool (*SoftwareTextureFrameCallback)(
+    void* /* user data */,
+    int64_t /* texture identifier */,
+    size_t /* width */,
+    size_t /* height */,
+    FlutterSoftwarePixelBuffer* /* pixel buffer out */);
+
 typedef void (*VsyncCallback)(void* /* user data */, intptr_t /* baton */);
 typedef void (*OnPreEngineRestartCallback)(void* /* user data */);
 
@@ -920,6 +950,18 @@ typedef struct {
   /// format. The buffer is owned by the Flutter engine and must be copied in
   /// this callback if needed.
   SoftwareSurfacePresentCallback surface_present_callback;
+
+  /// Optional callback invoked by the engine to retrieve a pixel buffer for
+  /// an external texture rendered in software mode. When set, allows the
+  /// |Texture| widget to render content provided by embedders/plugins even
+  /// when the engine is using the software rasterizer (e.g. when ANGLE/D3D11
+  /// is unavailable on Windows).
+  ///
+  /// This field is read using SAFE_ACCESS so older embedders that do not
+  /// provide it continue to work.
+  SoftwareTextureFrameCallback external_texture_frame_callback;
+  /// User data passed back to |external_texture_frame_callback|.
+  void* external_texture_user_data;
 } FlutterSoftwareRendererConfig;
 
 typedef struct {
