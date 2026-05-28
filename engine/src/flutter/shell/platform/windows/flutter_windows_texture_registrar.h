@@ -63,8 +63,8 @@ class FlutterWindowsTextureRegistrar {
       textures_;
   std::mutex map_mutex_;
 
-  // Pixel-buffer texture callbacks registered while running in software mode
-  // (when |gl_| is null). Keyed by software-mode texture ids.
+  // Pixel-buffer texture callbacks used by the software texture population
+  // path. Keyed by software-mode texture ids.
   std::unordered_map<int64_t, FlutterDesktopPixelBufferTextureConfig>
       software_pixel_buffer_callbacks_;
 
