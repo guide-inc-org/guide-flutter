@@ -38,12 +38,12 @@ int64_t FlutterWindowsTextureRegistrar::RegisterTexture(
     }
 
     // Pixel-buffer textures need to work in BOTH GL and software rendering
-    // modes — but |gl_| is always non-null (constructed unconditionally in
-    // FlutterWindowsEngine), so we cannot use it to decide which mode is
-    // active. Instead, we register the callback in BOTH maps:
+    // modes. |gl_| may be null if GL proc lookup failed, and even when it is
+    // non-null it does not indicate which renderer mode is currently active.
+    // Instead, register the callback in BOTH maps:
     // - |textures_| (via EmplaceTexture) for the GL path
     // - |software_pixel_buffer_callbacks_| for the software path
-    // The actual rendering mode is decided by the engine later via the
+    // The actual rendering mode is selected by the engine later via the
     // appropriate FlutterRendererConfig callback.
     auto external_texture =
         std::make_unique<flutter::ExternalTexturePixelBuffer>(
