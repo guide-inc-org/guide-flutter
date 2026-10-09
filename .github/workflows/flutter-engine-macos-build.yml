@@ -1,0 +1,135 @@
+name: Build Flutter Engine macOS
+
+# FlutterMacOS.xcframework (universal arm64 + x86_64) for debug and release, built like the
+# official engine (engine/src/flutter/ci/builders/mac_host_engine.json) from this branch, and
+# attached to the release `tag` as macos-debug.zip / macos-release.zip.
+# Apps replace bin/cache/artifacts/engine/darwin-x64{,-release}/FlutterMacOS.xcframework with them
+# (sbi-fx-pc: `make replace-engine-macos`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create / update
+        required: true
+        default: 3.29.3_macos_v1
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, release]
+        cpu: [arm64, x64]
+    runs-on: macos-14
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf "$ANDROID_HOME" /Users/runner/Library/Android /Users/runner/.dotnet /Users/runner/hostedtoolcache \
+            /usr/local/share/chromium /usr/local/lib/node_modules || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install depot_tools
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          echo "$RUNNER_TEMP/depot_tools" >> "$GITHUB_PATH"
+
+      - name: Sync engine dependencies
+        run: |
+          # macOS host only: no Android SDK / JDK / web toolchains.
+          cat > .gclient <<'EOF'
+          solutions = [
+            {
+              "custom_deps": {},
+              "deps_file": "DEPS",
+              "managed": False,
+              "name": ".",
+              "safesync_url": "",
+              "url": "https://github.com/flutter/flutter.git",
+              "custom_vars": {
+                "download_android_deps": False,
+                "download_jdk": False,
+                "download_esbuild": False,
+                "setup_githooks": False,
+              },
+            },
+          ]
+          EOF
+          gclient sync -D --no-history
+          df -h /
+
+      - name: Build FlutterMacOS.framework (${{ matrix.mode }}, ${{ matrix.cpu }})
+        working-directory: engine/src
+        run: |
+          OUT=mac_${{ matrix.mode }}_framework_${{ matrix.cpu }}
+          # x64 is the host build of the official CI, arm64 the `--mac` one.
+          TARGET=$([ "${{ matrix.cpu }}" = arm64 ] && echo "--mac --mac-cpu arm64" || echo "")
+          ./flutter/tools/gn --target-dir "$OUT" $TARGET --runtime-mode ${{ matrix.mode }} \
+            --no-lto --prebuilt-dart-sdk --no-rbe --no-goma --xcode-symlinks
+          ninja -C "out/$OUT" flutter/shell/platform/darwin/macos:zip_macos_flutter_framework
+          # tar keeps the framework's symlinks (upload-artifact does not).
+          tar -czf "$GITHUB_WORKSPACE/framework.tgz" -C "out/$OUT" FlutterMacOS.framework
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-${{ matrix.mode }}-${{ matrix.cpu }}
+          path: framework.tgz
+          retention-days: 7
+
+  package:
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: engine/src/flutter/sky/tools
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: frameworks
+
+      - name: Create universal FlutterMacOS.xcframework
+        run: |
+          for mode in debug release; do
+            for cpu in arm64 x64; do
+              mkdir -p "work/$mode-$cpu"
+              tar -xzf "frameworks/framework-$mode-$cpu/framework.tgz" -C "work/$mode-$cpu"
+            done
+            # Release: stripped like the official artifact (no dSYM: it needs the engine's clang toolchain).
+            STRIP=$([ "$mode" = release ] && echo --strip || echo "")
+            python3 engine/src/flutter/sky/tools/create_macos_framework.py --dst "$PWD/out/$mode" \
+              --arm64-out-dir "$PWD/work/$mode-arm64" --x64-out-dir "$PWD/work/$mode-x64" $STRIP
+            lipo -archs "out/$mode/FlutterMacOS.xcframework/macos-arm64_x86_64/FlutterMacOS.framework/FlutterMacOS"
+            (cd "out/$mode" && ditto -c -k --keepParent FlutterMacOS.xcframework "$GITHUB_WORKSPACE/macos-$mode.zip")
+          done
+          ls -la macos-*.zip
+
+      - name: Upload to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Engine macOS ${{ inputs.tag }}
+          files: |
+            macos-debug.zip
+            macos-release.zip
+          fail_on_unmatched_files: true
+          body: |
+            FlutterMacOS.xcframework (universal arm64 + x86_64) built from `${{ github.ref_name }}` (${{ github.sha }}).
+
+            Patch: `shell/platform/common/accessibility_bridge.cc` — skip a child without parent in
+            `AccessibilityBridge::CreateRemoveReparentedNodesUpdate` instead of dereferencing null
+            (EXC_BAD_ACCESS at 0x50 on macOS with semantics on: E2E builds, VoiceOver).
+
+            Replace `bin/cache/artifacts/engine/darwin-x64/FlutterMacOS.xcframework` (macos-debug.zip) and
+            `bin/cache/artifacts/engine/darwin-x64-release/FlutterMacOS.xcframework` (macos-release.zip).

@@ -222,8 +222,13 @@ AccessibilityBridge::CreateRemoveReparentedNodesUpdate() {
         continue;
       }
 
-      // Flutter's root node should never be reparented.
-      assert(child->parent());
+      // Flutter's root node should never be reparented, but a semantics update can list the
+      // current tree root (no parent) as a child; release builds compile the assert out and
+      // dereference null below (crash in E2E runs on macOS). Re-adding it is left to the
+      // second update of CommitUpdates.
+      if (!child->parent()) {
+        continue;
+      }
 
       // Skip nodes whose parents are unchanged.
       if (child->parent()->id() == node_update.second.id) {
